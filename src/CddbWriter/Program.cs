@@ -7,12 +7,13 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 static void PrintUsage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  dotnet run --project src/CddbWriter -- --cgi <url> [--encoding <name>] [--toc <path>] [--xmcd-out <path>] [--out-encoding <name>]");
+    Console.WriteLine("  dotnet run --project src/CddbWriter -- --cgi <url> [--encoding <name>] [--toc <path>] [--wmp-drive <D:>] [--xmcd-out <path>] [--out-encoding <name>]");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --cgi          FreeDB-compatible CGI endpoint URL (e.g., http://gnudb.gnudb.org/~cddb/cddb.cgi)");
     Console.WriteLine("  --encoding     Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
     Console.WriteLine("  --toc          Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
+    Console.WriteLine("  --wmp-drive    Read TOC from Windows Media Player for the given drive (e.g., D:). Requires Windows Media Player.");
     Console.WriteLine("  --xmcd-out     Save fetched data as XMCD text to the given file path");
     Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
 }
@@ -20,6 +21,7 @@ static void PrintUsage()
 string? cgiUrl = null;
 string encodingName = "euc-jp";
 string? tocPath = null;
+string? wmpDrive = null;
 string? xmcdOut = null;
 string? outEncodingName = null;
 
@@ -36,6 +38,9 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--toc":
             tocPath = (i + 1 < args.Length) ? args[++i] : null;
+            break;
+        case "--wmp-drive":
+            wmpDrive = (i + 1 < args.Length) ? args[++i] : null;
             break;
         case "--xmcd-out":
             xmcdOut = (i + 1 < args.Length) ? args[++i] : null;
@@ -54,35 +59,57 @@ if (string.IsNullOrWhiteSpace(cgiUrl))
     return;
 }
 
-DiscToc toc;
-if (!string.IsNullOrWhiteSpace(tocPath))
+DiscToc? toc = null;
+
+// Prefer WMP if specified
+if (!string.IsNullOrWhiteSpace(wmpDrive))
 {
     try
     {
-        var json = await File.ReadAllTextAsync(tocPath);
-        var dto = JsonSerializer.Deserialize<TocDto>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        if (dto is null || dto.TrackOffsetsFrames is null || dto.TrackOffsetsFrames.Count == 0)
-            throw new Exception("Invalid TOC JSON.");
-        toc = new DiscToc
+        var reader = new WmpTocReader();
+        toc = reader.TryRead(wmpDrive);
+        if (toc == null)
         {
-            LeadoutOffsetFrames = dto.LeadoutOffsetFrames
-        };
-        toc.TrackOffsetsFrames.AddRange(dto.TrackOffsetsFrames);
+            Console.WriteLine($"Failed to read TOC via Windows Media Player for drive {wmpDrive}. Falling back...");
+        }
+        else
+        {
+            Console.WriteLine($"TOC read from Windows Media Player for drive {wmpDrive}.");
+        }
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"Failed to read TOC JSON: {ex.Message}");
-        return;
+        Console.WriteLine($"WMP TOC read error: {ex.Message}. Falling back...");
     }
 }
-else
+
+// Fallback to JSON TOC
+if (toc == null)
 {
-    Console.WriteLine("Warning: --toc not specified. Using sample values.");
-    toc = new DiscToc
+    if (!string.IsNullOrWhiteSpace(tocPath))
     {
-        LeadoutOffsetFrames = 180000
-    };
-    toc.TrackOffsetsFrames.AddRange(new[] { 150, 15000, 30000, 45000, 60000, 75000, 90000, 105000, 120000, 135000 });
+        try
+        {
+            var json = await File.ReadAllTextAsync(tocPath);
+            var dto = System.Text.Json.JsonSerializer.Deserialize<TocDto>(json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (dto is null || dto.TrackOffsetsFrames is null || dto.TrackOffsetsFrames.Count == 0)
+                throw new Exception("Invalid TOC JSON.");
+            toc = new DiscToc { LeadoutOffsetFrames = dto.LeadoutOffsetFrames };
+            toc.TrackOffsetsFrames.AddRange(dto.TrackOffsetsFrames);
+            Console.WriteLine($"TOC loaded from JSON: {tocPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to read TOC JSON: {ex.Message}");
+            return;
+        }
+    }
+    else
+    {
+        Console.WriteLine("Warning: no TOC source specified. Using sample values.");
+        toc = new DiscToc { LeadoutOffsetFrames = 180000 };
+        toc.TrackOffsetsFrames.AddRange(new[] { 150, 15000, 30000, 45000, 60000, 75000, 90000, 105000, 120000, 135000 });
+    }
 }
 
 var client = new FreedbClient(cgiUrl!, encodingName: encodingName);
@@ -125,7 +152,7 @@ if (!string.IsNullOrWhiteSpace(xmcdOut))
 {
     try
     {
-        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-writer", "0.1.0");
+        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-writer", "0.2.0");
         var encName = outEncodingName ?? encodingName;
         Encoding outEnc;
         try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }

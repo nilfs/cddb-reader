@@ -6,6 +6,7 @@ HTTP/CGI の `cddb query` と `cddb read` に対応し、EUC-JP / Shift_JIS / UT
 - 対応: cddb query / cddb read（HTTP/CGI）
 - 文字コード: EUC-JP / Shift_JIS / UTF-8（`Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)` 済）
 - TOC 入力: JSON（物理ドライブからの TOC 取得は別途）
+- XMCD保存: `--xmcd-out` で取得結果を .xmcd 形式で保存可能
 
 ## 要件
 
@@ -23,10 +24,12 @@ dotnet build
 2) 実行例（gnudb に問い合わせ）
 
 ```bash
-dotnet run --project src/CddbWriter -- 
+dotnet run --project src/CddbWriter -- \
   --cgi http://gnudb.gnudb.org/~cddb/cddb.cgi \
   --encoding euc-jp \
-  --toc sample/toc.sample.json
+  --toc sample/toc.sample.json \
+  --xmcd-out out/sample.xmcd \
+  --out-encoding utf-8
 ```
 
 主な引数:
@@ -35,6 +38,8 @@ dotnet run --project src/CddbWriter --
   Freedb日本語は提供元の案内に従ってください（`http://<host>/~cddb/cddb.cgi` など）
 - `--encoding`: 応答文字コード（既定: `euc-jp`）。`shift_jis` / `utf-8` も可
 - `--toc`: TOC の JSON ファイルパス
+- `--xmcd-out`: 取得したメタデータを XMCD テキストとして保存するファイルパス
+- `--out-encoding`: 保存する XMCD の文字コード（既定: `--encoding` と同じ）
 
 TOC JSON の例（`sample/toc.sample.json`）:
 ```json
@@ -47,6 +52,7 @@ TOC JSON の例（`sample/toc.sample.json`）:
 3) 出力
 - 一致候補一覧（`cddb query`）
 - 先頭候補の XMCD（`cddb read`）を表示（DTITLE/DYEAR/DGENRE/TTITLEn）
+- `--xmcd-out` 指定時は XMCD をファイル保存（終端の `.` は含めません）
 
 ## 実 CD から TOC を取得するには
 
@@ -63,6 +69,7 @@ TOC JSON の例（`sample/toc.sample.json`）:
 - discid 算出は FreeDB/CDDB 仕様に準拠（各トラック開始秒の各桁合計の mod 255）
 - 応答コード: 200（厳密一致）/ 210, 211（複数一致）/ 202（未検出）に対応
 - XMCD パースは必要最小限（DTITLE/DYEAR/DGENRE/TTITLEn）。他フィールドは Raw 辞書に格納
+- XMCD 保存は `DTITLE/DYEAR/DGENRE/TTITLEn/EXTD/EXTTn/PLAYORDER` を出力。トラックオフセットと長さはコメント行に含めます
 
 ## ライセンス
 

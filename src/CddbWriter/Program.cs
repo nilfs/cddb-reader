@@ -7,17 +7,21 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 static void PrintUsage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  dotnet run --project src/CddbWriter -- --cgi <url> [--encoding <name>] [--toc <path>]");
+    Console.WriteLine("  dotnet run --project src/CddbWriter -- --cgi <url> [--encoding <name>] [--toc <path>] [--xmcd-out <path>] [--out-encoding <name>]");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --cgi       FreeDB-compatible CGI endpoint URL (e.g., http://gnudb.gnudb.org/~cddb/cddb.cgi)");
-    Console.WriteLine("  --encoding  Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
-    Console.WriteLine("  --toc       Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
+    Console.WriteLine("  --cgi          FreeDB-compatible CGI endpoint URL (e.g., http://gnudb.gnudb.org/~cddb/cddb.cgi)");
+    Console.WriteLine("  --encoding     Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
+    Console.WriteLine("  --toc          Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
+    Console.WriteLine("  --xmcd-out     Save fetched data as XMCD text to the given file path");
+    Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
 }
 
 string? cgiUrl = null;
 string encodingName = "euc-jp";
 string? tocPath = null;
+string? xmcdOut = null;
+string? outEncodingName = null;
 
 // simple args parse
 for (int i = 0; i < args.Length; i++)
@@ -32,6 +36,12 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--toc":
             tocPath = (i + 1 < args.Length) ? args[++i] : null;
+            break;
+        case "--xmcd-out":
+            xmcdOut = (i + 1 < args.Length) ? args[++i] : null;
+            break;
+        case "--out-encoding":
+            outEncodingName = (i + 1 < args.Length) ? args[++i] : outEncodingName;
             break;
     }
 }
@@ -108,4 +118,31 @@ if (!string.IsNullOrEmpty(xmcd.DGenre)) Console.WriteLine($"DGENRE: {xmcd.DGenre
 for (int i = 0; i < xmcd.TrackTitles.Count; i++)
 {
     Console.WriteLine($"TTITLE{i}: {xmcd.TrackTitles[i]}");
+}
+
+// Save XMCD if requested
+if (!string.IsNullOrWhiteSpace(xmcdOut))
+{
+    try
+    {
+        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-writer", "0.1.0");
+        var encName = outEncodingName ?? encodingName;
+        Encoding outEnc;
+        try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }
+        var full = Path.GetFullPath(xmcdOut);
+        var dir = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(full, text, outEnc);
+        Console.WriteLine($"Saved XMCD: {full} ({outEnc.WebName})");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Failed to save XMCD: {ex.Message}");
+    }
+}
+
+public class TocDto
+{
+    public List<int> TrackOffsetsFrames { get; set; } = new();
+    public int LeadoutOffsetFrames { get; set; }
 }

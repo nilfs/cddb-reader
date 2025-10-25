@@ -1,0 +1,16 @@
+# Build artifacts
+bin/
+obj/
+out/
+
+# VS/VSCode
+.vs/
+.vscode/
+
+# User-specific
+*.user
+*.suo
+
+# OS
+.DS_Store
+Thumbs.db

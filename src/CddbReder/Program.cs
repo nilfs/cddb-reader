@@ -1,13 +1,13 @@
 using System.Text;
 using System.Text.Json;
-using CddbWriter.Cddb;
+using CddbReader.Cddb;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 static void PrintUsage()
 {
     Console.WriteLine("Usage:");
-    Console.WriteLine("  dotnet run --project src/CddbWriter -- --cgi <url> [--encoding <name>] [--toc <path>] [--wmp-drive <D:>] [--xmcd-out <path>] [--out-encoding <name>]");
+    Console.WriteLine("  dotnet run --project src/CddbReader -- --cgi <url> [--encoding <name>] [--toc <path>] [--wmp-drive <D:>] [--xmcd-out <path>] [--out-encoding <name>]");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --cgi          FreeDB-compatible CGI endpoint URL (e.g., http://gnudb.gnudb.org/~cddb/cddb.cgi)");
@@ -152,7 +152,7 @@ if (!string.IsNullOrWhiteSpace(xmcdOut))
 {
     try
     {
-        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-writer", "0.2.0");
+        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-reader", "0.2.0");
         var encName = outEncodingName ?? encodingName;
         Encoding outEnc;
         try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }

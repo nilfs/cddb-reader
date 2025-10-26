@@ -16,26 +16,24 @@ static string? TryGetVolumeSerialNumber(string? driveSpecifier)
 
     var normalized = driveSpecifier.Trim();
     normalized = normalized.TrimEnd('\\', '/');
-    if (normalized.EndsWith(":", StringComparison.Ordinal))
+    if (normalized.EndsWith(':'))
         normalized = normalized[..^1];
     if (normalized.Length == 0) return null;
 
     string query = $"SELECT DeviceID,VolumeSerialNumber FROM Win32_LogicalDisk WHERE DeviceID = '{normalized.ToUpperInvariant()}:'";
-    using (var searcher = new ManagementObjectSearcher(query))
+    using var searcher = new ManagementObjectSearcher(query);
+    foreach (ManagementObject disk in searcher.Get().Cast<ManagementObject>())
     {
-        foreach (ManagementObject disk in searcher.Get())
-        {
-            var serial = disk["VolumeSerialNumber"]?.ToString();
-            if (string.IsNullOrWhiteSpace(serial))
-                continue;
+        var serial = disk["VolumeSerialNumber"]?.ToString();
+        if (string.IsNullOrWhiteSpace(serial))
+            continue;
 
-            var trimmed = serial.Trim();
-            trimmed = trimmed.TrimStart('0');
-            if (trimmed.Length == 0)
-                trimmed = "0";
+        var trimmed = serial.Trim();
+        trimmed = trimmed.TrimStart('0');
+        if (trimmed.Length == 0)
+            trimmed = "0";
 
-            return trimmed;
-        }
+        return trimmed;
     }
     return null;
 }
@@ -96,16 +94,12 @@ static void PrintUsage()
     Console.WriteLine("  --user         Username to send in the hello parameter (required)");
     Console.WriteLine("  --host         Hostname to send in the hello parameter (required)");
     Console.WriteLine("  --encoding     Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
-    Console.WriteLine("  --toc          Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
-    Console.WriteLine("  --wmp-drive    Read TOC from Windows Media Player for the given drive (e.g., D:). Requires Windows Media Player.");
     Console.WriteLine("  --xmcd-out     Save fetched data as an .xmcd file under the specified directory");
     Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
     Console.WriteLine("  --cdplayer-ini  Export cdplayer.ini entry (writes to Windows or VirtualStore path)");
 }
 string? cgiUrl = "http://freedbtest.dyndns.org/~cddb/cddb.cgi";
 string encodingName = "utf-8";
-string? tocPath = null;
-string? wmpDrive = null;
 string? xmcdOut = null;
 string? outEncodingName = null;
 string? helloUser = null;
@@ -122,12 +116,6 @@ for (int i = 0; i < args.Length; i++)
             break;
         case "--encoding":
             encodingName = (i + 1 < args.Length) ? args[++i] : encodingName;
-            break;
-        case "--toc":
-            tocPath = (i + 1 < args.Length) ? args[++i] : null;
-            break;
-        case "--wmp-drive":
-            wmpDrive = (i + 1 < args.Length) ? args[++i] : null;
             break;
         case "--xmcd-out":
             xmcdOut = (i + 1 < args.Length) ? args[++i] : null;
@@ -246,10 +234,4 @@ if (exportCdPlayerIni)
             }
         }
     }
-}
-
-public class TocDto
-{
-    public List<int> TrackOffsetsFrames { get; set; } = [];
-    public int LeadoutOffsetFrames { get; set; }
 }

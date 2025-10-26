@@ -14,8 +14,7 @@ public class FreedbClient
     private readonly Encoding _encoding;
 
     // cgiBase: 例) http://gnudb.gnudb.org/~cddb/cddb.cgi
-    // encodingName: Freedb日本語は EUC-JP のことが多い。状況に応じて "euc-jp" / "shift_jis" / "utf-8" を切替
-    public FreedbClient(string cgiBase, string appName = "cddb-writer", string appVersion = "0.1.0", string? user = null, string? host = null, int proto = 6, string encodingName = "euc-jp")
+    public FreedbClient(string cgiBase, string appName = "cddb-reader", string appVersion = "0.1.0", string? user = null, string? host = null, int proto = 6, string encodingName = "euc-jp")
     {
         _http = new HttpClient();
         _cgiBase = new Uri(cgiBase);
@@ -39,82 +38,47 @@ public class FreedbClient
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(appName, appVersion));
     }
 
-    public async Task<List<CddbMatch>> QueryAsync(TableOfContents toc2)
+    public async Task<List<CddbMatch>> QueryAsync(TableOfContents toc)
     {
         //string discId = CddbUtil.ComputeDiscIdHex(toc);
-        string discId = toc2.FreeDbId;
-        var parts = new List<string> { "cddb", "query", discId, toc2.Tracks.Count.ToString(CultureInfo.InvariantCulture) };
+        string discId = toc.FreeDbId;
+        var parts = new List<string> { "cddb", "query", discId, toc.Tracks.Count.ToString(CultureInfo.InvariantCulture) };
         // 各トラックのオフセット（フレーム数）
         //parts.AddRange(toc.TrackOffsetsFrames.Select(o => o.ToString(CultureInfo.InvariantCulture)));
-        parts.AddRange(toc2.Tracks.Select(o => o.Offset.ToString(CultureInfo.InvariantCulture)));
+        parts.AddRange(toc.Tracks.Select(o => o.Offset.ToString(CultureInfo.InvariantCulture)));
         // 総再生秒
-        parts.Add(((int)Math.Floor(toc2.Length / 75.0)).ToString(CultureInfo.InvariantCulture));
+        parts.Add(((int)Math.Floor(toc.Length / 75.0)).ToString(CultureInfo.InvariantCulture));
         //parts.Add(toc.TotalSeconds.ToString(CultureInfo.InvariantCulture));
 
         string cmd = string.Join('+', parts);
-        var url = $"{_cgiBase}?cmd={cmd}&hello={_helloParam}&proto={_proto}";
-        var text = await GetTextAsync(url);
+        var response = await SendCommandAsync(cmd);
 
-        var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-        if (lines.Length == 0) return new List<CddbMatch>();
-
-        var first = lines[0];
-        if (first.StartsWith("200 ")) // single exact match
+        return response.StatusCode switch
         {
-            // 1行: "200 category discid title"
-            var m = ParseMatchLine(first.Substring(4).Trim());
-            return m is null ? new List<CddbMatch>() : new List<CddbMatch> { m };
-        }
-        else if (first.StartsWith("210 ") || first.StartsWith("211 ")) // multi
-        {
-            var results = new List<CddbMatch>();
-            for (int i = 1; i < lines.Length; i++)
-            {
-                var line = lines[i];
-                if (line == ".") break;
-                var m = ParseMatchLine(line);
-                if (m != null) results.Add(m);
-            }
-            return results;
-        }
-        else if (first.StartsWith("202 ")) // no match
-        {
-            return new List<CddbMatch>();
-        }
-        else
-        {
-            // その他コードは空扱い
-            return new List<CddbMatch>();
-        }
+            200 => response.ParseSingleMatch(),
+            210 or 211 => response.ParseMultipleMatches(),
+            202 => [],
+            _ => []
+        };
     }
 
     public async Task<List<string>> ReadAsync(string category, string discId)
     {
         string cmd = $"cddb+read+{category}+{discId}";
-        var url = $"{_cgiBase}?cmd={cmd}&hello={_helloParam}&proto={_proto}";
-        var text = await GetTextAsync(url);
+        var response = await SendCommandAsync(cmd);
 
-        var lines = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-        if (lines.Length == 0) return null;
-        if (!lines[0].StartsWith("210 ")) // 210 OK, CDDB database entry follows (until terminating `.`)
-            return null;
-
-        var xmcdLines = new List<string>();
-        for (int i = 1; i < lines.Length; i++)
-        {
-            if (lines[i] == ".") break;
-            xmcdLines.Add(lines[i]);
-        }
-        return xmcdLines;
+        return response.StatusCode == 210 ? response.BodyLines : null;
     }
 
-    private async Task<string> GetTextAsync(string url)
+    private async Task<CddbResponse> SendCommandAsync(string cmd)
     {
+        var url = $"{_cgiBase}?cmd={cmd}&hello={_helloParam}&proto={_proto}";
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         var resp = await _http.SendAsync(req);
         resp.EnsureSuccessStatusCode();
+
         var bytes = await resp.Content.ReadAsByteArrayAsync();
-        return _encoding.GetString(bytes);
+        return CddbResponse.Parse(_encoding.GetString(bytes));
     }
 
     private static CddbMatch? ParseMatchLine(string line)
@@ -130,13 +94,93 @@ public class FreedbClient
         };
     }
 
+    private sealed record CddbResponse(int StatusCode, string StatusMessage, List<string> BodyLines)
+    {
+        public static CddbResponse Parse(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return new CddbResponse(0, string.Empty, []);
+            }
+
+            var lines = text.Split('\n', StringSplitOptions.TrimEntries);
+            if (lines.Length == 0)
+            {
+                return new CddbResponse(0, string.Empty, []);
+            }
+
+            var header = lines[0];
+            int status = 0;
+            string message = string.Empty;
+
+            var space = header.IndexOf(' ');
+            if (space > 0)
+            {
+                if (!int.TryParse(header[..space], NumberStyles.Integer, CultureInfo.InvariantCulture, out status))
+                {
+                    status = 0;
+                }
+                message = header[(space + 1)..];
+            }
+            else
+            {
+                if (!int.TryParse(header, NumberStyles.Integer, CultureInfo.InvariantCulture, out status))
+                {
+                    status = 0;
+                }
+                message = string.Empty;
+            }
+
+            var body = new List<string>();
+            for (int i = 1; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (line == ".") break;
+                body.Add(line);
+            }
+
+            return new CddbResponse(status, message, body);
+        }
+
+        public List<CddbMatch> ParseSingleMatch()
+        {
+            if (BodyLines.Count > 0)
+            {
+                var candidate = ParseMatchLine(BodyLines[0]);
+                if (candidate != null)
+                    return [candidate];
+            }
+
+            if (!string.IsNullOrEmpty(StatusMessage))
+            {
+                var candidate = ParseMatchLine(StatusMessage);
+                if (candidate != null)
+                    return [candidate];
+            }
+
+            return [];
+        }
+
+        public List<CddbMatch> ParseMultipleMatches()
+        {
+            var results = new List<CddbMatch>();
+            foreach (var line in BodyLines)
+            {
+                var candidate = ParseMatchLine(line);
+                if (candidate != null)
+                    results.Add(candidate);
+            }
+            return results;
+        }
+    }
+
     public static XmcdRecord ParseXmcd(string category, string discId, List<string> lines)
     {
         var rec = new XmcdRecord { Category = category, DiscId = discId };
         foreach (var line in lines)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            if (line.StartsWith("#")) continue; // コメント行
+            if (line.StartsWith('#')) continue; // コメント行
 
             int eq = line.IndexOf('=');
             if (eq <= 0) continue;
@@ -150,7 +194,7 @@ public class FreedbClient
             else if (key == "DGENRE") rec.DGenre = val;
             else if (key.StartsWith("TTITLE"))
             {
-                if (int.TryParse(key.Substring("TTITLE".Length), out int idx))
+                if (int.TryParse(key.AsSpan("TTITLE".Length), out int idx))
                 {
                     while (rec.TrackTitles.Count <= idx) rec.TrackTitles.Add(string.Empty);
                     rec.TrackTitles[idx] = val;

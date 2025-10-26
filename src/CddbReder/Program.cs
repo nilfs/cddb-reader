@@ -11,6 +11,8 @@ static void PrintUsage()
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --cgi          FreeDB-compatible CGI endpoint URL (e.g., http://gnudb.gnudb.org/~cddb/cddb.cgi)");
+    Console.WriteLine("  --user         Username to send in the hello parameter (required)");
+    Console.WriteLine("  --host         Hostname to send in the hello parameter (required)");
     Console.WriteLine("  --encoding     Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
     Console.WriteLine("  --toc          Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
     Console.WriteLine("  --wmp-drive    Read TOC from Windows Media Player for the given drive (e.g., D:). Requires Windows Media Player.");
@@ -23,6 +25,8 @@ string? tocPath = null;
 string? wmpDrive = null;
 string? xmcdOut = null;
 string? outEncodingName = null;
+string? helloUser = null;
+string? helloHost = null;
 
 // simple args parse
 for (int i = 0; i < args.Length; i++)
@@ -47,6 +51,12 @@ for (int i = 0; i < args.Length; i++)
         case "--out-encoding":
             outEncodingName = (i + 1 < args.Length) ? args[++i] : outEncodingName;
             break;
+        case "--user":
+            helloUser = (i + 1 < args.Length) ? args[++i] : null;
+            break;
+        case "--host":
+            helloHost = (i + 1 < args.Length) ? args[++i] : null;
+            break;
     }
 }
 
@@ -55,6 +65,14 @@ if (string.IsNullOrWhiteSpace(cgiUrl))
     PrintUsage();
     Console.WriteLine();
     Console.WriteLine("Error: --cgi is required.");
+    return;
+}
+
+if (string.IsNullOrWhiteSpace(helloUser) || string.IsNullOrWhiteSpace(helloHost))
+{
+    PrintUsage();
+    Console.WriteLine();
+    Console.WriteLine("Error: --user and --host are required.");
     return;
 }
 
@@ -111,7 +129,7 @@ if (toc == null)
     }
 }
 
-var client = new FreedbClient(cgiUrl!, encodingName: encodingName);
+var client = new FreedbClient(cgiUrl!, encodingName: encodingName, user: helloUser, host: helloHost);
 
 // Query
 var matches = await client.QueryAsync(toc);

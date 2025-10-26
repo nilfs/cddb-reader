@@ -51,8 +51,9 @@ public class FreedbClient
         _cgiBase = new Uri(cgiBase);
         _proto = proto;
 
-        user ??= Environment.UserName;
-        host ??= Environment.MachineName;
+        if (string.IsNullOrWhiteSpace(user)) throw new ArgumentException("user must be provided", nameof(user));
+        if (string.IsNullOrWhiteSpace(host)) throw new ArgumentException("host must be provided", nameof(host));
+
         _helloParam = $"{Uri.EscapeDataString(user)}+{Uri.EscapeDataString(host)}+{Uri.EscapeDataString(appName)}+{Uri.EscapeDataString(appVersion)}";
 
         try

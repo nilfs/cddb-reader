@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using CddbReder.Cddb;
+using System.Text;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -16,8 +17,7 @@ static void PrintUsage()
     Console.WriteLine("  --xmcd-out     Save fetched data as XMCD text to the given file path");
     Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
 }
-
-string? cgiUrl = null;
+string? cgiUrl = "http://freedbtest.dyndns.org/~cddb/cddb.cgi";
 string encodingName = "euc-jp";
 string? tocPath = null;
 string? wmpDrive = null;
@@ -107,7 +107,7 @@ if (toc == null)
     {
         Console.WriteLine("Warning: no TOC source specified. Using sample values.");
         toc = new DiscToc { LeadoutOffsetFrames = 180000 };
-        toc.TrackOffsetsFrames.AddRange(new[] { 150, 15000, 30000, 45000, 60000, 75000, 90000, 105000, 120000, 135000 });
+        toc.TrackOffsetsFrames.AddRange([150, 15000, 30000, 45000, 60000, 75000, 90000, 105000, 120000, 135000]);
     }
 }
 
@@ -169,6 +169,6 @@ if (!string.IsNullOrWhiteSpace(xmcdOut))
 
 public class TocDto
 {
-    public List<int> TrackOffsetsFrames { get; set; } = new();
+    public List<int> TrackOffsetsFrames { get; set; } = [];
     public int LeadoutOffsetFrames { get; set; }
 }

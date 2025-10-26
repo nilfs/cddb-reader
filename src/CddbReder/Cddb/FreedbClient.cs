@@ -1,39 +1,9 @@
-﻿using System.Globalization;
+﻿using MetaBrainz.MusicBrainz.DiscId;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 
 namespace CddbReder.Cddb;
-
-public static class CddbUtil
-{
-    // FreeDB/CDDB の discid 算出
-    public static string ComputeDiscIdHex(DiscToc toc)
-    {
-        if (toc.TrackCount == 0) throw new ArgumentException("TOC is empty.");
-
-        int cddbSum = 0;
-        foreach (var offset in toc.TrackOffsetsFrames)
-        {
-            int seconds = offset / 75;
-            cddbSum += SumOfDigits(seconds);
-        }
-        int n = toc.TrackCount;
-        int t = toc.TotalSeconds;
-        int discId = ((cddbSum % 255) << 24) | (t << 8) | n;
-        return discId.ToString("x8"); // 8桁の16進
-    }
-
-    private static int SumOfDigits(int n)
-    {
-        int s = 0;
-        while (n > 0)
-        {
-            s += n % 10;
-            n /= 10;
-        }
-        return s;
-    }
-}
 
 public class FreedbClient
 {
@@ -69,14 +39,17 @@ public class FreedbClient
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(appName, appVersion));
     }
 
-    public async Task<List<CddbMatch>> QueryAsync(DiscToc toc)
+    public async Task<List<CddbMatch>> QueryAsync(TableOfContents toc2)
     {
-        string discId = CddbUtil.ComputeDiscIdHex(toc);
-        var parts = new List<string> { "cddb", "query", discId, toc.TrackCount.ToString(CultureInfo.InvariantCulture) };
+        //string discId = CddbUtil.ComputeDiscIdHex(toc);
+        string discId = toc2.FreeDbId;
+        var parts = new List<string> { "cddb", "query", discId, toc2.Tracks.Count.ToString(CultureInfo.InvariantCulture) };
         // 各トラックのオフセット（フレーム数）
-        parts.AddRange(toc.TrackOffsetsFrames.Select(o => o.ToString(CultureInfo.InvariantCulture)));
+        //parts.AddRange(toc.TrackOffsetsFrames.Select(o => o.ToString(CultureInfo.InvariantCulture)));
+        parts.AddRange(toc2.Tracks.Select(o => o.Offset.ToString(CultureInfo.InvariantCulture)));
         // 総再生秒
-        parts.Add(toc.TotalSeconds.ToString(CultureInfo.InvariantCulture));
+        parts.Add(((int)Math.Floor(toc2.Length / 75.0)).ToString(CultureInfo.InvariantCulture));
+        //parts.Add(toc.TotalSeconds.ToString(CultureInfo.InvariantCulture));
 
         string cmd = string.Join('+', parts);
         var url = $"{_cgiBase}?cmd={cmd}&hello={_helloParam}&proto={_proto}";
@@ -115,7 +88,7 @@ public class FreedbClient
         }
     }
 
-    public async Task<XmcdRecord?> ReadAsync(string category, string discId)
+    public async Task<List<string>> ReadAsync(string category, string discId)
     {
         string cmd = $"cddb+read+{category}+{discId}";
         var url = $"{_cgiBase}?cmd={cmd}&hello={_helloParam}&proto={_proto}";
@@ -132,7 +105,7 @@ public class FreedbClient
             if (lines[i] == ".") break;
             xmcdLines.Add(lines[i]);
         }
-        return ParseXmcd(category, discId, xmcdLines);
+        return xmcdLines;
     }
 
     private async Task<string> GetTextAsync(string url)
@@ -157,7 +130,7 @@ public class FreedbClient
         };
     }
 
-    private static XmcdRecord ParseXmcd(string category, string discId, List<string> lines)
+    public static XmcdRecord ParseXmcd(string category, string discId, List<string> lines)
     {
         var rec = new XmcdRecord { Category = category, DiscId = discId };
         foreach (var line in lines)

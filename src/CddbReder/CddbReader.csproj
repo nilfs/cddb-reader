@@ -19,4 +19,9 @@
     </COMReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MetaBrainz.MusicBrainz.DiscId" Version="5.2.0" />
+    <PackageReference Include="System.Management" Version="9.0.10" />
+  </ItemGroup>
+
 </Project>

@@ -1,8 +1,41 @@
 ﻿using CddbReder.Cddb;
+using MetaBrainz.MusicBrainz.DiscId;
+using System.Management;
 using System.Text;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+using static System.Net.Mime.MediaTypeNames;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+// ボリュームシリアル番号を取得する
+static string? TryGetVolumeSerialNumber(string? driveSpecifier)
+{
+    if (string.IsNullOrWhiteSpace(driveSpecifier)) return null;
+
+    var normalized = driveSpecifier.Trim();
+    normalized = normalized.TrimEnd('\\', '/');
+    if (normalized.EndsWith(":", StringComparison.Ordinal))
+        normalized = normalized[..^1];
+    if (normalized.Length == 0) return null;
+
+    string query = $"SELECT DeviceID,VolumeSerialNumber FROM Win32_LogicalDisk WHERE DeviceID = '{normalized.ToUpperInvariant()}:'";
+    using (var searcher = new ManagementObjectSearcher(query))
+    {
+        foreach (ManagementObject disk in searcher.Get())
+        {
+            var serial = disk["VolumeSerialNumber"]?.ToString();
+            if (string.IsNullOrWhiteSpace(serial))
+                continue;
+
+            var trimmed = serial.Trim();
+            trimmed = trimmed.TrimStart('0');
+            if (trimmed.Length == 0)
+                trimmed = "0";
+
+            return trimmed;
+        }
+    }
+    return null;
+}
 
 static void PrintUsage()
 {
@@ -18,15 +51,17 @@ static void PrintUsage()
     Console.WriteLine("  --wmp-drive    Read TOC from Windows Media Player for the given drive (e.g., D:). Requires Windows Media Player.");
     Console.WriteLine("  --xmcd-out     Save fetched data as XMCD text to the given file path");
     Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
+    Console.WriteLine("  --cdplayer-ini  Export cdplayer.ini entry (writes to Windows or VirtualStore path)");
 }
 string? cgiUrl = "http://freedbtest.dyndns.org/~cddb/cddb.cgi";
-string encodingName = "euc-jp";
+string encodingName = "utf-8";
 string? tocPath = null;
 string? wmpDrive = null;
 string? xmcdOut = null;
 string? outEncodingName = null;
 string? helloUser = null;
 string? helloHost = null;
+bool exportCdPlayerIni = false;
 
 // simple args parse
 for (int i = 0; i < args.Length; i++)
@@ -57,6 +92,9 @@ for (int i = 0; i < args.Length; i++)
         case "--host":
             helloHost = (i + 1 < args.Length) ? args[++i] : null;
             break;
+        case "--cdplayer-ini":
+            exportCdPlayerIni = true;
+            break;
     }
 }
 
@@ -76,63 +114,12 @@ if (string.IsNullOrWhiteSpace(helloUser) || string.IsNullOrWhiteSpace(helloHost)
     return;
 }
 
-DiscToc? toc = null;
-
-// Prefer WMP if specified
-if (!string.IsNullOrWhiteSpace(wmpDrive))
-{
-    try
-    {
-        var reader = new WmpTocReader();
-        toc = reader.TryRead(wmpDrive);
-        if (toc == null)
-        {
-            Console.WriteLine($"Failed to read TOC via Windows Media Player for drive {wmpDrive}. Falling back...");
-        }
-        else
-        {
-            Console.WriteLine($"TOC read from Windows Media Player for drive {wmpDrive}.");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"WMP TOC read error: {ex.Message}. Falling back...");
-    }
-}
-
-// Fallback to JSON TOC
-if (toc == null)
-{
-    if (!string.IsNullOrWhiteSpace(tocPath))
-    {
-        try
-        {
-            var json = await File.ReadAllTextAsync(tocPath);
-            var dto = System.Text.Json.JsonSerializer.Deserialize<TocDto>(json, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (dto is null || dto.TrackOffsetsFrames is null || dto.TrackOffsetsFrames.Count == 0)
-                throw new Exception("Invalid TOC JSON.");
-            toc = new DiscToc { LeadoutOffsetFrames = dto.LeadoutOffsetFrames };
-            toc.TrackOffsetsFrames.AddRange(dto.TrackOffsetsFrames);
-            Console.WriteLine($"TOC loaded from JSON: {tocPath}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to read TOC JSON: {ex.Message}");
-            return;
-        }
-    }
-    else
-    {
-        Console.WriteLine("Warning: no TOC source specified. Using sample values.");
-        toc = new DiscToc { LeadoutOffsetFrames = 180000 };
-        toc.TrackOffsetsFrames.AddRange([150, 15000, 30000, 45000, 60000, 75000, 90000, 105000, 120000, 135000]);
-    }
-}
+TableOfContents? tableOfContents = TableOfContents.ReadDisc(null, DiscReadFeature.TableOfContents);
 
 var client = new FreedbClient(cgiUrl!, encodingName: encodingName, user: helloUser, host: helloHost);
 
 // Query
-var matches = await client.QueryAsync(toc);
+var matches = await client.QueryAsync(tableOfContents);
 if (matches.Count == 0)
 {
     Console.WriteLine("No match.");
@@ -147,7 +134,8 @@ foreach (var m in matches)
 
 // Read first
 var first = matches[0];
-var xmcd = await client.ReadAsync(first.Category, first.DiscId);
+var xmcdLines = await client.ReadAsync(first.Category, first.DiscId);
+var xmcd = FreedbClient.ParseXmcd(first.Category, first.DiscId, xmcdLines);
 if (xmcd == null)
 {
     Console.WriteLine("Failed to read XMCD.");
@@ -164,24 +152,45 @@ for (int i = 0; i < xmcd.TrackTitles.Count; i++)
     Console.WriteLine($"TTITLE{i}: {xmcd.TrackTitles[i]}");
 }
 
-// Save XMCD if requested
 if (!string.IsNullOrWhiteSpace(xmcdOut))
 {
-    try
+    var encName = outEncodingName ?? encodingName;
+    Encoding outEnc;
+    try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }
+
+    var full = Path.GetFullPath(xmcdOut);
+    var dir = Path.GetDirectoryName(full);
+    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+    await File.WriteAllLinesAsync(full, xmcdLines, outEnc);
+    Console.WriteLine($"Saved XMCD: {full} ({outEnc.WebName})");
+}
+
+if (exportCdPlayerIni)
+{
+    var volumeSerial = TryGetVolumeSerialNumber(TableOfContents.DefaultDevice);
+    if (string.IsNullOrWhiteSpace(volumeSerial))
     {
-        var text = XmcdSerializer.ToXmcd(xmcd, toc, "cddb-reader", "0.2.0");
-        var encName = outEncodingName ?? encodingName;
-        Encoding outEnc;
-        try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }
-        var full = Path.GetFullPath(xmcdOut);
-        var dir = Path.GetDirectoryName(full);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(full, text, outEnc);
-        Console.WriteLine($"Saved XMCD: {full} ({outEnc.WebName})");
+        Console.WriteLine("Warning: Unable to determine volume serial number. Skipping cdplayer.ini export.");
     }
-    catch (Exception ex)
+    else
     {
-        Console.WriteLine($"Failed to save XMCD: {ex.Message}");
+        int trackCount = tableOfContents?.Tracks.Count ?? xmcd.TrackTitles.Count;
+        if (trackCount <= 0)
+        {
+            Console.WriteLine("Warning: No track information available. Skipping cdplayer.ini export.");
+        }
+        else
+        {
+            try
+            {
+                var exportedPath = await CdPlayerIniExporter.ExportAsync(volumeSerial, xmcd, trackCount, encoding: Encoding.GetEncoding(932));
+                Console.WriteLine($"Exported cdplayer.ini entry: {exportedPath}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to export cdplayer.ini: {ex.Message}");
+            }
+        }
     }
 }
 

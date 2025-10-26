@@ -1,10 +1,13 @@
 ﻿using CddbReder.Cddb;
 using MetaBrainz.MusicBrainz.DiscId;
+using System.IO;
 using System.Management;
 using System.Text;
-using static System.Net.Mime.MediaTypeNames;
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+const string UnknownArtist = "Unknown Artist";
+const string UnknownTitle = "Unknown Title";
 
 // ボリュームシリアル番号を取得する
 static string? TryGetVolumeSerialNumber(string? driveSpecifier)
@@ -37,6 +40,52 @@ static string? TryGetVolumeSerialNumber(string? driveSpecifier)
     return null;
 }
 
+static (string Artist, string Title) ExtractArtistAndTitle(string? dTitle)
+{
+    var sanitized = SanitizeForMetadata(dTitle);
+    if (string.IsNullOrEmpty(sanitized))
+        return (UnknownArtist, UnknownTitle);
+
+    var parts = sanitized.Split('/', 2, StringSplitOptions.TrimEntries);
+    if (parts.Length == 2)
+    {
+        var artist = string.IsNullOrEmpty(parts[0]) ? UnknownArtist : parts[0];
+        var title = string.IsNullOrEmpty(parts[1]) ? UnknownTitle : parts[1];
+        return (artist, title);
+    }
+
+    return (sanitized, UnknownTitle);
+}
+
+static string SanitizeForMetadata(string? value)
+{
+    if (string.IsNullOrEmpty(value))
+        return string.Empty;
+
+    return value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+}
+
+static string SanitizeFileNameComponent(string? value)
+{
+    var text = string.IsNullOrWhiteSpace(value) ? "Unknown" : value.Trim();
+    var invalid = Path.GetInvalidFileNameChars();
+    var sb = new StringBuilder(text.Length);
+    foreach (var ch in text)
+    {
+        if (Array.IndexOf(invalid, ch) >= 0)
+        {
+            sb.Append('_');
+        }
+        else
+        {
+            sb.Append(ch);
+        }
+    }
+
+    var sanitized = sb.ToString().Trim();
+    return sanitized.Length == 0 ? "Unknown" : sanitized;
+}
+
 static void PrintUsage()
 {
     Console.WriteLine("Usage:");
@@ -49,7 +98,7 @@ static void PrintUsage()
     Console.WriteLine("  --encoding     Response encoding: euc-jp (default), shift_jis, utf-8, etc.");
     Console.WriteLine("  --toc          Path to TOC JSON file with { trackOffsetsFrames: number[], leadoutOffsetFrames: number }");
     Console.WriteLine("  --wmp-drive    Read TOC from Windows Media Player for the given drive (e.g., D:). Requires Windows Media Player.");
-    Console.WriteLine("  --xmcd-out     Save fetched data as XMCD text to the given file path");
+    Console.WriteLine("  --xmcd-out     Save fetched data as an .xmcd file under the specified directory");
     Console.WriteLine("  --out-encoding Encoding for the saved XMCD (default: same as --encoding)");
     Console.WriteLine("  --cdplayer-ini  Export cdplayer.ini entry (writes to Windows or VirtualStore path)");
 }
@@ -135,12 +184,13 @@ foreach (var m in matches)
 // Read first
 var first = matches[0];
 var xmcdLines = await client.ReadAsync(first.Category, first.DiscId);
-var xmcd = FreedbClient.ParseXmcd(first.Category, first.DiscId, xmcdLines);
-if (xmcd == null)
+if (xmcdLines == null || xmcdLines.Count == 0)
 {
     Console.WriteLine("Failed to read XMCD.");
     return;
 }
+
+var xmcd = FreedbClient.ParseXmcd(first.Category, first.DiscId, xmcdLines);
 
 Console.WriteLine();
 Console.WriteLine("=== XMCD ===");
@@ -158,11 +208,15 @@ if (!string.IsNullOrWhiteSpace(xmcdOut))
     Encoding outEnc;
     try { outEnc = Encoding.GetEncoding(encName); } catch { outEnc = Encoding.UTF8; }
 
-    var full = Path.GetFullPath(xmcdOut);
-    var dir = Path.GetDirectoryName(full);
-    if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-    await File.WriteAllLinesAsync(full, xmcdLines, outEnc);
-    Console.WriteLine($"Saved XMCD: {full} ({outEnc.WebName})");
+    var targetDir = Path.GetFullPath(xmcdOut);
+    Directory.CreateDirectory(targetDir);
+
+    var (artist, title) = ExtractArtistAndTitle(xmcd.DTitle);
+    var fileName = $"{SanitizeFileNameComponent(artist)} - {SanitizeFileNameComponent(title)}.xmcd";
+    var destination = Path.Combine(targetDir, fileName);
+
+    await File.WriteAllLinesAsync(destination, xmcdLines, outEnc);
+    Console.WriteLine($"Saved XMCD: {destination} ({outEnc.WebName})");
 }
 
 if (exportCdPlayerIni)

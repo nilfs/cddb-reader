@@ -1,6 +1,6 @@
-using System.Text;
+﻿using System.Text;
 
-namespace CddbWriter.Cddb;
+namespace CddbReder.Cddb;
 
 public static class XmcdSerializer
 {

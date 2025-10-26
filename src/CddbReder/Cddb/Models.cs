@@ -1,4 +1,4 @@
-namespace CddbWriter.Cddb;
+﻿namespace CddbReder.Cddb;
 
 public class CddbMatch
 {

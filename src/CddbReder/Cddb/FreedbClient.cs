@@ -1,8 +1,8 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 
-namespace CddbWriter.Cddb;
+namespace CddbReder.Cddb;
 
 public static class CddbUtil
 {

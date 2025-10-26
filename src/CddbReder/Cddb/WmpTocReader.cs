@@ -1,8 +1,7 @@
-using System.Globalization;
-using CddbWriter.Cddb;
+﻿using System.Globalization;
 using WMPLib;
 
-namespace CddbWriter.Cddb;
+namespace CddbReder.Cddb;
 
 public class WmpTocReader
 {
